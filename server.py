@@ -2,10 +2,16 @@ import socket
 import os
 import struct
 import hashlib
-import time
+import random
 
 CHUNK_SIZE = 1024
 TIMEOUT = 2  # วินาที
+
+# ---- CONFIG: ปรับค่าตรงนี้เพื่อทดลอง ----
+DROP_EVERY = 10      # drop ทุก packet ที่หารลงตัวด้วย 10 (ตั้งเป็น 0 ถ้าไม่อยาก drop แบบ fixed)
+DROP_PROB = 0.1      # ความน่าจะเป็นในการ drop packet (0.0 - 1.0)
+CORRUPT_PROB = 0.1   # ความน่าจะเป็นในการ corrupt packet (0.0 - 1.0)
+# -------------------------------------------
 
 def compute_checksum(data: bytes) -> int:
     return int(hashlib.md5(data).hexdigest(), 16) % (1 << 16)
@@ -14,6 +20,14 @@ def make_packet(seq, data, eof):
     checksum = compute_checksum(data)
     header = struct.pack("!IHB", seq, checksum, eof)
     return header + data
+
+def maybe_corrupt(data: bytes) -> bytes:
+    if len(data) > 0:
+        # สุ่มเลือก byte มาแก้ไข
+        i = random.randint(0, len(data) - 1)
+        corrupted_byte = (data[i] + 1) % 256
+        data = data[:i] + bytes([corrupted_byte]) + data[i+1:]
+    return data
 
 def main():
     server_ip = "127.0.0.1"
@@ -45,8 +59,28 @@ def main():
                 packet = make_packet(seq, chunk, 0)
 
                 while True:
-                    sock.sendto(packet, client_addr)
-                    print(f"Sent seq {seq}, waiting for ACK...")
+                    # ---- Error Simulation ----
+                    drop = False
+                    corrupt = False
+
+                    if DROP_EVERY > 0 and seq % DROP_EVERY == 0:
+                        drop = True
+                    elif random.random() < DROP_PROB:
+                        drop = True
+
+                    if not drop and random.random() < CORRUPT_PROB:
+                        corrupt = True
+                        packet = packet[:7] + maybe_corrupt(packet[7:])
+
+                    if drop:
+                        print(f"[X] Dropped seq {seq}")
+                    else:
+                        if corrupt:
+                            print(f"[!] Corrupted seq {seq}")
+                        else:
+                            print(f"Sent seq {seq}")
+                        sock.sendto(packet, client_addr)
+                    # --------------------------
 
                     sock.settimeout(TIMEOUT)
                     try:
